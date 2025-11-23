@@ -3,13 +3,13 @@
 import os
 from itertools import product
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
 from stable_baselines3 import PPO, A2C
 from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.callbacks import EvalCallback
 
 from environment.custom_env import SmartBuildingSecurityEnv
 
@@ -17,18 +17,26 @@ from environment.custom_env import SmartBuildingSecurityEnv
 # ------------- Helper: Environment factory ------------- #
 
 def make_env():
-    def _init():
-        return SmartBuildingSecurityEnv()
-    return _init
+    """
+    Factory for SmartBuildingSecurityEnv (for DummyVecEnv).
+    DummyVecEnv expects a callable that returns an Env instance.
+    """
+    return SmartBuildingSecurityEnv()
 
 
 # ------------- PPO and A2C training using SB3 ------------- #
 
 def train_ppo():
+    """
+    Train multiple PPO agents on the SmartBuildingSecurityEnv
+    with an expanded hyperparameter grid and EvalCallback.
+    """
     os.makedirs("models/pg", exist_ok=True)
     os.makedirs("logs/ppo", exist_ok=True)
+    os.makedirs("results/ppo", exist_ok=True)
 
-    learning_rates = [3e-4, 1e-4]
+    # Expanded grid: 3 x 2 x 2 = 12 runs
+    learning_rates = [3e-4, 1e-4, 5e-5]
     gammas = [0.95, 0.99]
     n_steps_list = [256, 512]
 
@@ -37,9 +45,20 @@ def train_ppo():
 
     for idx, (lr, gamma, n_steps) in enumerate(configs):
         run_name = f"ppo_lr{lr}_g{gamma}_ns{n_steps}_run{idx}"
-        print(f"\n=== Training PPO run {idx+1}/{len(configs)}: {run_name} ===")
+        print(f"\n=== Training PPO run {idx + 1}/{len(configs)}: {run_name} ===")
 
         env = DummyVecEnv([make_env])
+        eval_env = DummyVecEnv([make_env])
+
+        eval_callback = EvalCallback(
+            eval_env,
+            best_model_save_path=os.path.join("models/pg", f"{run_name}_best"),
+            log_path=os.path.join("results/ppo", run_name),
+            eval_freq=10_000,
+            n_eval_episodes=10,
+            deterministic=True,
+            render=False,
+        )
 
         model = PPO(
             "MlpPolicy",
@@ -51,17 +70,24 @@ def train_ppo():
             tensorboard_log="logs/ppo",
         )
 
-        model.learn(total_timesteps=total_timesteps)
+        model.learn(total_timesteps=total_timesteps, callback=eval_callback)
         model.save(os.path.join("models/pg", f"{run_name}.zip"))
 
         env.close()
+        eval_env.close()
 
 
 def train_a2c():
+    """
+    Train multiple A2C agents on the SmartBuildingSecurityEnv
+    with an expanded hyperparameter grid and EvalCallback.
+    """
     os.makedirs("models/pg", exist_ok=True)
     os.makedirs("logs/a2c", exist_ok=True)
+    os.makedirs("results/a2c", exist_ok=True)
 
-    learning_rates = [7e-4, 3e-4]
+    # Expanded grid: 5 x 2 = 10 runs
+    learning_rates = [7e-4, 3e-4, 1e-4, 5e-4, 2e-4]
     gammas = [0.95, 0.99]
 
     configs = list(product(learning_rates, gammas))
@@ -69,9 +95,20 @@ def train_a2c():
 
     for idx, (lr, gamma) in enumerate(configs):
         run_name = f"a2c_lr{lr}_g{gamma}_run{idx}"
-        print(f"\n=== Training A2C run {idx+1}/{len(configs)}: {run_name} ===")
+        print(f"\n=== Training A2C run {idx + 1}/{len(configs)}: {run_name} ===")
 
         env = DummyVecEnv([make_env])
+        eval_env = DummyVecEnv([make_env])
+
+        eval_callback = EvalCallback(
+            eval_env,
+            best_model_save_path=os.path.join("models/pg", f"{run_name}_best"),
+            log_path=os.path.join("results/a2c", run_name),
+            eval_freq=10_000,
+            n_eval_episodes=10,
+            deterministic=True,
+            render=False,
+        )
 
         model = A2C(
             "MlpPolicy",
@@ -82,10 +119,11 @@ def train_a2c():
             tensorboard_log="logs/a2c",
         )
 
-        model.learn(total_timesteps=total_timesteps)
+        model.learn(total_timesteps=total_timesteps, callback=eval_callback)
         model.save(os.path.join("models/pg", f"{run_name}.zip"))
 
         env.close()
+        eval_env.close()
 
 
 # ------------- Simple REINFORCE implementation ------------- #
@@ -114,6 +152,9 @@ def train_reinforce(
     hidden_sizes=(128, 128),
     save_path="models/pg/reinforce_final.pt",
 ):
+    """
+    Vanilla REINFORCE implementation on the SmartBuildingSecurityEnv.
+    """
     os.makedirs("models/pg", exist_ok=True)
 
     env = SmartBuildingSecurityEnv()
@@ -160,7 +201,6 @@ def train_reinforce(
         returns = (returns - returns.mean()) / (returns.std() + 1e-8)
 
         log_probs_tensor = torch.stack(log_probs)
-
         loss = -torch.sum(log_probs_tensor * returns)
 
         optimizer.zero_grad()
@@ -168,7 +208,7 @@ def train_reinforce(
         optimizer.step()
 
         ep_return = sum(rewards)
-        print(f"[REINFORCE] Episode {ep+1}/{episodes}, Return: {ep_return:.2f}")
+        print(f"[REINFORCE] Episode {ep + 1}/{episodes}, Return: {ep_return:.2f}")
 
     torch.save(policy.state_dict(), save_path)
     env.close()
@@ -176,16 +216,15 @@ def train_reinforce(
 
 
 if __name__ == "__main__":
-    # You can call them separately when needed.
-    # Example:
-    #   python training/pg_training.py ppo
-    #   python training/pg_training.py a2c
-    #   python training/pg_training.py reinforce
+    # Example usage:
+    #   python -m training.pg_training ppo
+    #   python -m training.pg_training a2c
+    #   python -m training.pg_training reinforce
 
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python training/pg_training.py [ppo|a2c|reinforce]")
+        print("Usage: python -m training.pg_training [ppo|a2c|reinforce]")
         sys.exit(0)
 
     mode = sys.argv[1].lower()

@@ -1,0 +1,74 @@
+# -----------------------------
+# Python / Virtual Environment
+# -----------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.pkl
+*.egg-info/
+.venv/
+env/
+venv/
+
+# -----------------------------
+# Jupyter / Cache
+# -----------------------------
+.ipynb_checkpoints/
+
+# -----------------------------
+# IDE / Editor
+# -----------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# -----------------------------
+# Logs & Outputs
+# -----------------------------
+logs/
+**/logs/
+*.log
+nohup.out
+
+# -----------------------------
+# Model Files (Large)
+# -----------------------------
+models/**/*.zip
+models/**/*.pt
+models/**/*.pth
+models/**/*.npz
+
+# Allow empty model folders
+!models/
+!models/pg/
+!models/dqn/
+
+# -----------------------------
+# Evaluation Outputs
+# -----------------------------
+*.csv
+evaluations.npz
+best_models_summary.txt
+
+# -----------------------------
+# Training Artifacts
+# -----------------------------
+results/
+**/results/
+
+# -----------------------------
+# OS System Files
+# -----------------------------
+.DS_Store
+Thumbs.db
+
+# -----------------------------
+# Build / Packaging
+# -----------------------------
+dist/
+build/
+*.egg
+*.egg-info/
