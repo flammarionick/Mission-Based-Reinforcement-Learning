@@ -4,6 +4,9 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 
+# NEW: pygame for visualization
+import pygame
+
 
 class SmartBuildingSecurityEnv(gym.Env):
     """
@@ -91,6 +94,20 @@ class SmartBuildingSecurityEnv(gym.Env):
 
         self.last_action = None
 
+        # Track breaches (used internally)
+        self._breach_occurred = False
+
+        # ---- Pygame rendering state (for mode="human") ----
+        self.screen = None
+        self.clock = None
+        self.font = None
+        self.window_width = 800
+        self.window_height = 400
+        self.zone_width = 120
+        self.zone_height = 150
+        self.zone_margin = 20
+        self.top_margin = 80
+
     # ------------ Gym API ------------ #
 
     def reset(self, *, seed=None, options=None):
@@ -110,6 +127,7 @@ class SmartBuildingSecurityEnv(gym.Env):
         self.guard_eta = 0
 
         self.last_action = None
+        self._breach_occurred = False
 
         # Optionally spawn an intruder at reset
         if self.np_random.random() < 0.5:
@@ -245,7 +263,8 @@ class SmartBuildingSecurityEnv(gym.Env):
         self.intruder_progress = 0.0
 
     def _update_guard(self, reward_ref):
-        # Move guard if dispatched
+        # NOTE: reward_ref is a float, so changes here won't propagate back.
+        # We keep your original logic to not break existing training.
         if self.guard_busy:
             if self.guard_eta > 0:
                 self.guard_eta -= 1
@@ -254,7 +273,7 @@ class SmartBuildingSecurityEnv(gym.Env):
                 # Guard arrives at target zone
                 if self.intruder_active and self.guard_zone == self.intruder_zone:
                     # Guard catches intruder
-                    reward_ref += 20.0
+                    # reward_ref += 20.0  # logically should add reward
                     self._clear_intruder()
 
                 # Guard is now free
@@ -263,7 +282,7 @@ class SmartBuildingSecurityEnv(gym.Env):
                 self.guard_eta = 0
 
     def _update_intruder(self, reward_ref, terminated_ref):
-        # Possibly spawn new intruder if none
+        # NOTE: same as above: reward_ref, terminated_ref not updated outside.
         if not self.intruder_active:
             if self.np_random.random() < self.intruder_spawn_prob:
                 self._spawn_intruder()
@@ -275,13 +294,8 @@ class SmartBuildingSecurityEnv(gym.Env):
 
         # If intruder reaches the asset and is still active -> catastrophic failure
         if self.intruder_progress >= 1.0 and self.intruder_active:
-            # Large negative reward
-            reward_ref += -30.0
+            # reward_ref += -30.0  # logically should add penalty
             self._clear_intruder()
-            # Mark episode as terminated by breach
-            # (we can't directly set terminated_ref since it's a float,
-            # so we will handle termination logic in step if needed.)
-            # Here we simply store a flag; the calling step can check.
             self._breach_occurred = True
         else:
             self._breach_occurred = False
@@ -302,8 +316,8 @@ class SmartBuildingSecurityEnv(gym.Env):
 
     def render(self, mode="ansi"):
         """
-        Simple text-based rendering. For high-quality 2D visualization,
-        use the pygame renderer in environment/rendering.py.
+        mode="ansi": return a text representation.
+        mode="human": open a pygame window and visualize zones, agent, intruder, guard.
         """
         if mode == "ansi":
             lines = []
@@ -318,10 +332,103 @@ class SmartBuildingSecurityEnv(gym.Env):
             lines.append(f"Motion: {self.motion}")
             lines.append(f"Time since scan: {self.time_since_scan}")
             return "\n".join(lines)
+
+        if mode == "human":
+            if self.screen is None:
+                pygame.init()
+                self.screen = pygame.display.set_mode(
+                    (self.window_width, self.window_height)
+                )
+                pygame.display.set_caption("Smart Building Security - RL Agent")
+                self.clock = pygame.time.Clock()
+                self.font = pygame.font.SysFont("arial", 18)
+
+            # Handle window close events so it doesn't freeze
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    self.screen = None
+                    return
+
+            # Background
+            self.screen.fill((20, 20, 30))
+
+            # Draw zones as rectangles
+            start_x = self.zone_margin
+            y = self.top_margin
+
+            for z in range(self.n_zones):
+                x = start_x + z * (self.zone_width + self.zone_margin)
+
+                # Color based on criticality
+                if self.critical_zones[z] == 1.0:
+                    base_color = (180, 60, 60)  # reddish for critical
+                else:
+                    base_color = (60, 120, 180)  # bluish for normal
+
+                rect = pygame.Rect(x, y, self.zone_width, self.zone_height)
+
+                # Highlight current focus
+                if z == self.current_zone:
+                    pygame.draw.rect(self.screen, (250, 250, 0), rect, border_radius=8)
+                    inner_rect = rect.inflate(-6, -6)
+                    pygame.draw.rect(self.screen, base_color, inner_rect, border_radius=8)
+                else:
+                    pygame.draw.rect(self.screen, base_color, rect, border_radius=8)
+
+                # Text: zone label
+                label = self.font.render(f"Zone {z}", True, (255, 255, 255))
+                self.screen.blit(label, (x + 10, y + 10))
+
+                # Motion indicator
+                motion_val = self.motion[z]
+                if motion_val > 0.5:
+                    m_text = self.font.render("MOTION", True, (255, 200, 0))
+                else:
+                    m_text = self.font.render("No motion", True, (180, 180, 180))
+                self.screen.blit(m_text, (x + 10, y + 40))
+
+                # Time since scan
+                t_text = self.font.render(
+                    f"Last scan: {int(self.time_since_scan[z])}", True, (200, 200, 200)
+                )
+                self.screen.blit(t_text, (x + 10, y + 65))
+
+                # Intruder
+                if self.intruder_active and self.intruder_zone == z:
+                    intr_x = x + self.zone_width // 2
+                    intr_y = y + self.zone_height - 30
+                    pygame.draw.circle(self.screen, (255, 50, 50), (intr_x, intr_y), 12)
+
+                # Guard
+                if self.guard_busy and self.guard_zone == z:
+                    guard_x = x + self.zone_width // 2
+                    guard_y = y + self.zone_height // 2
+                    pygame.draw.circle(self.screen, (50, 255, 50), (guard_x, guard_y), 10)
+
+            # Status text at the top
+            status_y = 10
+            info_lines = [
+                f"Step: {self.time_step}/{self.max_steps}",
+                f"Current zone: {self.current_zone}",
+                f"Intruder active: {self.intruder_active} (zone={self.intruder_zone})",
+                f"Intruder progress: {self.intruder_progress:.2f}",
+                f"Guard busy: {self.guard_busy} (zone={self.guard_zone}, eta={self.guard_eta})",
+                f"Last action: {self.last_action}",
+            ]
+            for i, text in enumerate(info_lines):
+                surf = self.font.render(text, True, (230, 230, 230))
+                self.screen.blit(surf, (20, status_y + i * 20))
+
+            pygame.display.flip()
+            # Limit FPS
+            self.clock.tick(self.metadata.get("render_fps", 10))
         else:
-            # You can integrate with pygame here if you want,
-            # but the main visualisation is handled in rendering.py.
+            # Fallback to ANSI if unknown mode
             print(self.render(mode="ansi"))
 
     def close(self):
-        pass
+        if self.screen is not None:
+            pygame.quit()
+            self.screen = None
+            self.clock = None
